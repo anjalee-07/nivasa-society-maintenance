@@ -145,6 +145,30 @@ describe("complaint creation and validation", () => {
     assert.equal(admin.status, 200);
   });
 
+  test("rejects a photo above the storage limit", async () => {
+    // D1 refuses values past roughly two megabytes, so the API must reject them
+    // before the write rather than failing with an opaque database error.
+    const tooBig = Buffer.concat([pngBytes(), Buffer.alloc(2 * 1024 * 1024)]);
+    const { status } = await createComplaint({
+      photo: { bytes: tooBig, type: "image/png", name: "huge.png" },
+    });
+    assert.equal(status, 413);
+  });
+
+  test("stores the image bytes rather than a storage pointer", async () => {
+    const source = pngBytes();
+    const { body } = await createComplaint({
+      title: "Broken latch on the gate",
+      photo: { bytes: source, type: "image/png", name: "latch.png" },
+    });
+    const complaint = await getComplaint(body.complaintId);
+    const response = await api(complaint.photos[0].url, { role: "resident", raw: true });
+    const returned = Buffer.from(await response.arrayBuffer());
+    assert.equal(returned.length, source.length);
+    assert.ok(returned.equals(source), "the bytes served must match the bytes uploaded");
+    assert.equal(complaint.photos[0].sizeBytes, source.length);
+  });
+
   test("an unknown photo id is not found", async () => {
     const { status } = await api("/api/photos/does-not-exist", { role: "admin" });
     assert.equal(status, 404);

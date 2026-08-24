@@ -2,7 +2,6 @@ import { env } from "cloudflare:workers";
 
 export type NivasaEnv = {
   DB: D1Database;
-  UPLOADS: R2Bucket;
   ADMIN_EMAILS?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
@@ -63,7 +62,7 @@ const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS complaint_photos (
     id TEXT PRIMARY KEY,
     complaint_id TEXT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
-    object_key TEXT NOT NULL,
+    data BLOB NOT NULL,
     original_name TEXT NOT NULL,
     content_type TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
@@ -157,6 +156,26 @@ async function addMissingColumns(db: D1Database): Promise<void> {
     await db
       .prepare("ALTER TABLE users ADD COLUMN admin_granted INTEGER NOT NULL DEFAULT 0")
       .run();
+  }
+
+  // Photos previously lived in R2 and the table stored only an object key.
+  // SQLite cannot relax that column in place, and the referenced objects no
+  // longer exist, so the table is rebuilt. Only photo rows are affected;
+  // complaints and their history are untouched.
+  const photoColumns = await db
+    .prepare("PRAGMA table_info(complaint_photos)")
+    .all<{ name: string }>();
+  const photoNames = new Set(photoColumns.results.map((column) => column.name));
+  if (photoNames.size > 0 && !photoNames.has("data")) {
+    const createTable = schemaStatements.find((statement) =>
+      statement.includes("CREATE TABLE IF NOT EXISTS complaint_photos"),
+    );
+    const createIndex = indexStatements.find((statement) =>
+      statement.includes("ON complaint_photos"),
+    );
+    await db.prepare("DROP TABLE complaint_photos").run();
+    if (createTable) await db.prepare(createTable).run();
+    if (createIndex) await db.prepare(createIndex).run();
   }
 }
 

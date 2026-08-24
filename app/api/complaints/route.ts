@@ -1,6 +1,6 @@
 import { requireAdmin, requireCurrentUser } from "../../../lib/auth";
 import { ApiError, handleApiError, noStoreJson, readString, requireSameOrigin } from "../../../lib/api";
-import { getAppEnv, getDatabase } from "../../../lib/database";
+import { getDatabase } from "../../../lib/database";
 import { queueOutboxDrain } from "../../../lib/notifications";
 
 const categories = new Set([
@@ -14,10 +14,11 @@ const categories = new Set([
 ]);
 const priorities = new Set(["Low", "Medium", "High"]);
 const statuses = new Set(["Open", "In Progress", "Resolved"]);
-const maxPhotoBytes = 5 * 1024 * 1024;
+// D1 rejects values beyond roughly two megabytes with SQLITE_TOOBIG, so the
+// upload limit is set below that ceiling rather than discovering it at runtime.
+const maxPhotoBytes = 2 * 1024 * 1024;
 
 export async function POST(request: Request) {
-  let uploadedObjectKey: string | null = null;
   try {
     requireSameOrigin(request);
     const user = await requireCurrentUser(request);
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
     const photoValue = form.get("photo");
     let photo: {
       id: string;
-      objectKey: string;
+      bytes: Uint8Array;
       originalName: string;
       contentType: string;
       sizeBytes: number;
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
 
     if (photoValue instanceof File && photoValue.size > 0) {
       if (photoValue.size > maxPhotoBytes) {
-        throw new ApiError(413, "The photo must be 5 MB or smaller.");
+        throw new ApiError(413, "The photo must be 2 MB or smaller.");
       }
       const bytes = new Uint8Array(await photoValue.arrayBuffer());
       const detectedType = detectImageType(bytes);
@@ -78,15 +79,9 @@ export async function POST(request: Request) {
         throw new ApiError(415, "Upload a genuine JPG, PNG, or WebP image.");
       }
       const safeName = sanitizeFilename(photoValue.name || "complaint-photo");
-      const objectKey = `complaints/${user.id}/${complaintId}/${crypto.randomUUID()}-${safeName}`;
-      await getAppEnv().UPLOADS.put(objectKey, bytes, {
-        httpMetadata: { contentType: detectedType },
-        customMetadata: { ownerId: user.id, complaintId },
-      });
-      uploadedObjectKey = objectKey;
       photo = {
         id: crypto.randomUUID(),
-        objectKey,
+        bytes,
         originalName: safeName,
         contentType: detectedType,
         sizeBytes: bytes.byteLength,
@@ -119,12 +114,12 @@ export async function POST(request: Request) {
     if (photo) {
       statements.push(
         db.prepare(`INSERT INTO complaint_photos (
-          id, complaint_id, object_key, original_name, content_type, size_bytes, created_at
+          id, complaint_id, data, original_name, content_type, size_bytes, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
           .bind(
             photo.id,
             complaintId,
-            photo.objectKey,
+            photo.bytes,
             photo.originalName,
             photo.contentType,
             photo.sizeBytes,
@@ -136,13 +131,8 @@ export async function POST(request: Request) {
 
     return noStoreJson({ complaintId, publicId }, { status: 201 });
   } catch (error) {
-    if (uploadedObjectKey) {
-      try {
-        await getAppEnv().UPLOADS.delete(uploadedObjectKey);
-      } catch {
-        // A later storage sweep can safely remove this unreferenced object.
-      }
-    }
+    // The photo is written in the same batch as the complaint, so a failure
+    // leaves nothing orphaned and needs no compensating cleanup.
     return handleApiError(error);
   }
 }

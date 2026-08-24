@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  blob,
   check,
   index,
   integer,
@@ -121,7 +122,7 @@ export const complaintPhotos = sqliteTable(
     complaintId: text("complaint_id")
       .notNull()
       .references(() => complaints.id, { onDelete: "cascade" }),
-    objectKey: text("object_key").notNull(),
+    data: blob("data").notNull(),
     originalName: text("original_name").notNull(),
     contentType: text("content_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),

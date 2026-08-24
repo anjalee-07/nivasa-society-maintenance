@@ -923,7 +923,7 @@ function NewComplaintModal({
               <img src={preview} alt="Selected complaint preview" />
             </>
           ) : <span className="upload-mark">＋</span>}
-          <span><strong>{photo ? photo.name : "Add a supporting photo"}</strong><small>JPG, PNG, or WebP · up to 5 MB</small></span>
+          <span><strong>{photo ? photo.name : "Add a supporting photo"}</strong><small>JPG, PNG, or WebP · up to 2 MB</small></span>
           <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setPhoto(event.target.files?.[0] ?? null)} />
           {photo && <button type="button" onClick={(event) => { event.preventDefault(); setPhoto(null); }}>Remove</button>}
         </label>

@@ -1,6 +1,6 @@
 # Nivasa system design
 
-Nivasa is a Cloudflare-compatible full-stack application built around D1 for structured records and R2 for private image objects. The frontend consumes route-handler APIs; every API resolves the authenticated platform user on the server and derives the role from stored data plus the configured admin email allowlist. Residents are always scoped to their own complaint and photo records. Admin mutations perform a second server-side role check.
+Nivasa is a Cloudflare-compatible full-stack application built around D1 for both structured records and private complaint images. The frontend consumes route-handler APIs; every API resolves the authenticated platform user on the server and derives the role from stored data plus the configured admin email allowlist. Residents are always scoped to their own complaint and photo records. Admin mutations perform a second server-side role check.
 
 ## Complaint history model
 
@@ -14,9 +14,11 @@ The threshold is a persisted integer setting from 1 to 60 days. Overdue is delib
 
 ## Photo handling
 
-The browser sends at most one optional image in a multipart request. The API limits the file to 5 MB and verifies JPEG, PNG, or WebP signatures from the bytes rather than trusting the filename or client MIME type. It creates a non-guessable R2 key containing the owner and complaint IDs, writes the object, and stores only metadata in `complaint_photos`. If the database write fails, the just-uploaded object is deleted to avoid an orphan.
+The browser sends at most one optional image in a multipart request. The API verifies JPEG, PNG, or WebP signatures from the bytes rather than trusting the filename or client MIME type, so a renamed executable is rejected before anything is stored. Images are held as a `BLOB` in `complaint_photos` beside their metadata. D1 refuses values past roughly two megabytes, so the API enforces a 2 MB limit and returns `413` rather than surfacing a database error.
 
-R2 objects are never exposed as public bucket URLs. `/api/photos/:id` joins photo metadata to its complaint, authorizes the current resident owner or an administrator, then streams the object with a private cache policy and `nosniff` protection.
+Storing the bytes in the database rather than object storage keeps the photo write inside the same batch as the complaint and its history event. The upload therefore commits or fails as a unit, and no compensating delete is needed to avoid orphaned objects. The trade-off is a firmer size ceiling and row-sized reads; object storage would be the better choice if photos grew larger or more numerous.
+
+Images are never served from a public path. `/api/photos/:id` joins the photo to its complaint, authorizes the current resident owner or an administrator, and only then returns the bytes, with a private cache policy and `nosniff` protection.
 
 ## Notification flow
 

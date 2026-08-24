@@ -13,7 +13,7 @@ Nivasa is a full-stack maintenance workflow for apartment societies. Residents c
 - Admin filters by text, status, overdue state, category, and age
 - Pinned important notices and resident email fan-out
 - Resend email integration with idempotent outbox records, background delivery, and backlog draining
-- D1 relational persistence and private R2 photo storage
+- D1 relational persistence, with complaint photos stored privately as database blobs
 - Responsive, keyboard-accessible resident and admin interfaces
 
 ## Local setup
@@ -25,7 +25,7 @@ Prerequisite: Node.js `>=22.13.0`.
 3. Run `npm run db:generate` after changing `db/schema.ts`.
 4. Start the application with `npm run dev`.
 
-The local Cloudflare runtime creates isolated D1 and R2 resources automatically. Local development exposes a safe role switcher with seeded resident and admin accounts. Those demo fixtures are created only when `SEED_DEMO_DATA` is `true`, which the local Wrangler config sets for you; hosted deployments start empty. That switcher is accepted only on `localhost`; hosted requests require platform identity headers.
+The local Cloudflare runtime creates an isolated D1 database automatically. Local development exposes a safe role switcher with seeded resident and admin accounts. Those demo fixtures are created only when `SEED_DEMO_DATA` is `true`, which the local Wrangler config sets for you; hosted deployments start empty. That switcher is accepted only on `localhost`; hosted requests require platform identity headers.
 
 ## Environment variables
 
@@ -66,19 +66,18 @@ domain; a `401` means the API key is wrong.
 
 ## Deploying to Cloudflare
 
-The application depends on Workers, D1, and R2, so it cannot run on Vercel,
-Render, or Railway without replacing its database and object storage. Deploying
-to Cloudflare keeps those primitives and needs no code changes.
+The application depends on Workers and D1, so it cannot run on Vercel, Render,
+or Railway without replacing its database layer. Deploying to Cloudflare keeps
+those primitives and needs no code changes. R2 is not required: complaint photos
+are stored in D1, so no object storage has to be enabled on the account.
 
 A free Cloudflare account is sufficient.
 
 1. Authenticate: `npx wrangler login`
-2. Create the database and bucket, then note the database id printed by the
-   first command:
+2. Create the database, then note the id it prints:
 
    ```
    npx wrangler d1 create nivasa-db
-   npx wrangler r2 bucket create nivasa-uploads
    ```
 
 3. Build and deploy with those resources. The build writes a complete
@@ -86,7 +85,7 @@ A free Cloudflare account is sufficient.
    rather than committed:
 
    ```
-   CF_D1_DATABASE_ID=<id> CF_D1_DATABASE_NAME=nivasa-db    CF_R2_BUCKET=nivasa-uploads npm run deploy
+   CF_D1_DATABASE_ID=<id> CF_D1_DATABASE_NAME=nivasa-db npm run deploy
    ```
 
    On Windows PowerShell, set the variables with `$env:NAME = "value"` first.
@@ -158,9 +157,9 @@ All JSON errors use `{ "error": "human-readable message" }`. Protected routes re
 | --- | --- | --- | --- |
 | `GET` | `/api/bootstrap` | Signed in | Profile, scoped complaints/history/photos, notices, metrics, settings, delivery activity |
 | `PATCH` | `/api/profile` | Signed in | Complete or update name, flat number, and phone |
-| `POST` | `/api/complaints` | Resident | Multipart complaint creation; optional `photo`, max 5 MB |
+| `POST` | `/api/complaints` | Resident | Multipart complaint creation; optional `photo`, max 2 MB |
 | `PATCH` | `/api/complaints` | Admin | Update status/priority with `expectedVersion` and optional note |
-| `GET` | `/api/photos/:id` | Owner/Admin | Stream a validated private complaint image from R2 |
+| `GET` | `/api/photos/:id` | Owner/Admin | Return a validated private complaint image to its owner or an administrator |
 | `POST` | `/api/notices` | Admin | Publish a notice and fan out email records when important |
 | `DELETE` | `/api/notices` | Admin | Remove a notice from the board |
 | `PATCH` | `/api/settings` | Admin | Set the overdue threshold from 1 to 60 days |
@@ -191,7 +190,7 @@ All JSON errors use `{ "error": "human-readable message" }`. Protected routes re
 | `settings` | Society configuration including `overdue_days` |
 | `complaints` | Current complaint projection, lifecycle, owner, idempotency key, and version |
 | `complaint_history` | Append-only creation/status/priority audit events with actor, note, and timestamp |
-| `complaint_photos` | Private R2 object metadata and complaint ownership link |
+| `complaint_photos` | Complaint image bytes, their metadata, and the ownership link |
 | `notices` | Published notices with important/pinned classification |
 | `notification_outbox` | Idempotent resident emails, attempts, delivery state, and provider error |
 
@@ -205,7 +204,7 @@ Indexes cover resident timelines, admin status/category filtering, complaint his
 - `npm run test:api` - 36 integration tests against the real worker
 - `npm run test:all` - both suites
 
-`test:api` starts the development worker with its own D1 and R2 bindings, because
+`test:api` starts the development worker with its own D1 binding, because
 the route handlers depend on the Cloudflare runtime and cannot be exercised by
 importing the built bundle. It runs with `EMAIL_DELIVERY_DISABLED=1`, so a test
 run exercises the whole outbox without ever contacting the email provider. Each

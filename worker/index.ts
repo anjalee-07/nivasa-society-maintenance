@@ -5,7 +5,6 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
-  UPLOADS: R2Bucket;
   ADMIN_EMAILS?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
