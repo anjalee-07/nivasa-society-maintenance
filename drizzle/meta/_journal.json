@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787166173813,
+      "tag": "0000_lowly_lorna_dane",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787166206151,
+      "tag": "0001_slippery_lilith",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787333146439,
+      "tag": "0002_true_red_ghost",
+      "breakpoints": true
+    }
+  ]
+}

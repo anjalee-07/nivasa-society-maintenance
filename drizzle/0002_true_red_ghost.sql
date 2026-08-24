@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `admin_granted` integer DEFAULT false NOT NULL;
