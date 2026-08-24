@@ -127,6 +127,7 @@ export function NivasaApp() {
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [needsSignIn, setNeedsSignIn] = useState(false);
 
   // A reviewer arrives on `?admin=<code>`. Redeem it once, strip it from the
   // address bar so the code is not left in history or copied links, then let the
@@ -161,7 +162,8 @@ export function NivasaApp() {
       const result = await requestJson<BootstrapData>("/api/bootstrap", {}, demoRole);
       setData(result);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "The dashboard could not be loaded.");
+      if (isUnauthenticated(loadError)) setNeedsSignIn(true);
+      else setError(loadError instanceof Error ? loadError.message : "The dashboard could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -175,7 +177,9 @@ export function NivasaApp() {
         if (active) setData(result);
       })
       .catch((loadError) => {
-        if (active) setError(messageOf(loadError));
+        if (!active) return;
+        if (isUnauthenticated(loadError)) setNeedsSignIn(true);
+        else setError(messageOf(loadError));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -199,6 +203,9 @@ export function NivasaApp() {
   };
 
   if (claiming || (loading && !data)) return <LoadingScreen />;
+  if (!data && needsSignIn) {
+    return <AuthScreen onSignedIn={() => { setNeedsSignIn(false); setLoading(true); void load(); }} />;
+  }
   if (!data) return <ErrorScreen message={error ?? "Nivasa is unavailable."} onRetry={() => void load()} />;
 
   const selectedComplaint = data.complaints.find((item) => item.id === selectedId) ?? null;
@@ -270,7 +277,21 @@ export function NivasaApp() {
         <div className="account-card">
           <span className="avatar">{initials(data.user.name)}</span>
           <span><strong>{data.user.name}</strong><small>{data.user.role === "admin" ? "Society administrator" : `Resident · ${data.user.flatNumber ?? "Profile pending"}`}</small></span>
-          {!data.user.isDemo && <a href="/signout-with-chatgpt?return_to=%2F" aria-label="Sign out">↗</a>}
+          {!data.user.isDemo && (
+            <button
+              className="sign-out"
+              type="button"
+              aria-label="Sign out"
+              onClick={async () => {
+                await requestJson("/api/auth", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "logout" }),
+                }, demoRole).catch(() => null);
+                window.location.href = "/";
+              }}
+            >↗</button>
+          )}
         </div>
       </aside>
 
@@ -1083,8 +1104,76 @@ function LoadingScreen() {
 }
 
 function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
-  const needsSignIn = message.toLowerCase().includes("sign in");
-  return <main className="error-screen"><span>!</span><h1>We could not open Nivasa.</h1><p>{message}</p>{needsSignIn ? <a className="primary-button" href="/signin-with-chatgpt?return_to=%2F">Sign in to continue</a> : <button className="primary-button" type="button" onClick={onRetry}>Try again</button>}</main>;
+  return <main className="error-screen"><span>!</span><h1>We could not open Nivasa.</h1><p>{message}</p><button className="primary-button" type="button" onClick={onRetry}>Try again</button></main>;
+}
+
+function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [name, setName] = useState("");
+  const [flatNumber, setFlatNumber] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const registering = mode === "register";
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await requestJson("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          registering
+            ? { action: "register", name, email, password, flatNumber }
+            : { action: "login", email, password },
+        ),
+      }, "resident");
+      onSignedIn();
+    } catch (submitError) {
+      setError(messageOf(submitError));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="auth-screen">
+      <section className="auth-card">
+        <div className="onboarding-mark">N</div>
+        <span className="eyebrow">Nivasa · Society care</span>
+        <h1>{registering ? "Create your resident account" : "Sign in to Nivasa"}</h1>
+        <p>{registering
+          ? "Register to raise maintenance requests and follow every update."
+          : "Welcome back. Sign in to track your society maintenance requests."}</p>
+
+        {error && <div className="inline-alert error auth-error"><span>!</span>{error}</div>}
+
+        <form className="modal-form" onSubmit={submit}>
+          {registering && (
+            <div className="field-pair">
+              <label><span>Full name</span><input required minLength={2} maxLength={70} value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
+              <label><span>Flat number</span><input maxLength={30} value={flatNumber} onChange={(event) => setFlatNumber(event.target.value)} placeholder="A-804" /></label>
+            </div>
+          )}
+          <label className="full-field"><span>Email</span><input required type="email" maxLength={160} value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
+          <label className="full-field">
+            <span>Password</span>
+            <input required type="password" minLength={registering ? 8 : undefined} maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={registering ? "new-password" : "current-password"} />
+            {registering && <small>At least 8 characters.</small>}
+          </label>
+          <button className="primary-button full" type="submit" disabled={busy}>
+            {busy ? (registering ? "Creating account…" : "Signing in…") : (registering ? "Create account" : "Sign in")}
+          </button>
+        </form>
+
+        <button className="auth-toggle" type="button" onClick={() => { setMode(registering ? "login" : "register"); setError(null); }}>
+          {registering ? "Already have an account? Sign in" : "New resident? Create an account"}
+        </button>
+      </section>
+    </main>
+  );
 }
 
 async function requestJson<T = { ok: boolean }>(path: string, init: RequestInit, demoRole: DemoRole): Promise<T> {
@@ -1128,6 +1217,11 @@ function statusTone(status: Status): string {
 
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+/** A 401 is a prompt to sign in, not an error worth showing as a failure. */
+function isUnauthenticated(error: unknown): boolean {
+  return error instanceof Error && error.message.toLowerCase().includes("sign in to continue");
 }
 
 function messageOf(error: unknown): string {

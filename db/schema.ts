@@ -25,6 +25,8 @@ export const users = sqliteTable(
     adminGranted: integer("admin_granted", { mode: "boolean" })
       .notNull()
       .default(false),
+    // Null for platform and demo identities, which authenticate elsewhere.
+    passwordHash: text("password_hash"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
@@ -177,5 +179,21 @@ export const notificationOutbox = sqliteTable(
       "outbox_status_check",
       sql`${table.status} IN ('pending', 'sent', 'failed')`,
     ),
+  ],
+);
+
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    index("idx_sessions_user").on(table.userId),
+    index("idx_sessions_expires").on(table.expiresAt),
   ],
 );

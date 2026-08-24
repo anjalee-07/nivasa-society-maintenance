@@ -29,6 +29,13 @@
       "when": 1787579429336,
       "tag": "0003_stormy_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787580823033,
+      "tag": "0004_condemned_grandmaster",
+      "breakpoints": true
     }
   ]
 }

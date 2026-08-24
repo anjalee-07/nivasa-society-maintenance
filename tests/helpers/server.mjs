@@ -45,8 +45,11 @@ export async function stopServer(child) {
 }
 
 /** Call the API as a resident or an administrator. */
-export async function api(path, { role = "admin", method = "GET", body, raw = false } = {}) {
-  const headers = new Headers({ "x-nivasa-demo-role": role });
+export async function api(path, { role = "admin", method = "GET", body, raw = false, headers: extra, cookie } = {}) {
+  // `role: null` omits the preview header entirely, which is how a test asks to
+  // be treated as an ordinary unauthenticated caller.
+  const headers = new Headers({ ...(role ? { "x-nivasa-demo-role": role } : {}), ...(extra ?? {}) });
+  if (cookie) headers.set("Cookie", cookie);
   let payload = body;
   if (body !== undefined && !(body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -76,6 +79,13 @@ export function pngBytes() {
 
 export function uniqueKey(label) {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+/** Pull the session cookie out of a Set-Cookie header. */
+export function sessionCookieFrom(response) {
+  const header = response.headers.get("set-cookie") ?? "";
+  const match = header.match(/nivasa_session=([^;]*)/);
+  return match ? `nivasa_session=${match[1]}` : null;
 }
 
 /** Create a complaint as the demo resident and return its id/publicId/version. */

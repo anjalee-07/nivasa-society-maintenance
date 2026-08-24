@@ -9,6 +9,7 @@ export type NivasaEnv = {
   DEMO_RESIDENT_EMAIL?: string;
   EMAIL_DELIVERY_DISABLED?: string;
   ADMIN_INVITE_CODE?: string;
+  TRUST_PLATFORM_IDENTITY?: string;
 };
 
 const appEnv = env as unknown as NivasaEnv;
@@ -23,8 +24,15 @@ const schemaStatements = [
     phone TEXT,
     role TEXT NOT NULL DEFAULT 'resident' CHECK (role IN ('resident', 'admin')),
     admin_granted INTEGER NOT NULL DEFAULT 0,
+    password_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -100,6 +108,8 @@ const indexStatements = [
   "CREATE INDEX IF NOT EXISTS idx_photos_complaint ON complaint_photos(complaint_id)",
   "CREATE INDEX IF NOT EXISTS idx_notices_important_published ON notices(important DESC, published_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON notification_outbox(status, created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
+  "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
 ];
 
 export function getAppEnv(): NivasaEnv {
@@ -156,6 +166,10 @@ async function addMissingColumns(db: D1Database): Promise<void> {
     await db
       .prepare("ALTER TABLE users ADD COLUMN admin_granted INTEGER NOT NULL DEFAULT 0")
       .run();
+  }
+  if (!present.has("password_hash")) {
+    // Nullable: platform and demo identities authenticate without a password.
+    await db.prepare("ALTER TABLE users ADD COLUMN password_hash TEXT").run();
   }
 
   // Photos previously lived in R2 and the table stored only an object key.

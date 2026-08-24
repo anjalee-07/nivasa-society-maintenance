@@ -32,6 +32,7 @@ The local Cloudflare runtime creates an isolated D1 database automatically. Loca
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `ADMIN_EMAILS` | Production | Comma-separated signed-in emails that receive the admin role. The list is authoritative: an email removed from it is demoted to `resident` on its next request, so deploying without this value leaves the society with no administrators |
+| `TRUST_PLATFORM_IDENTITY` | Only behind a trusted proxy | Set to `1` to accept `oai-authenticated-user-*` identity headers. Unsafe anywhere the hosting layer does not strip those headers from inbound requests |
 | `ADMIN_INVITE_CODE` | Optional | Shared code that lets a signed-in visitor claim the admin role at `/?admin=<code>`. Unset by default, which removes the route entirely. Intended for review access; remove it once review is complete |
 | `RESEND_API_KEY` | For live email | Resend API key used by the notification outbox dispatcher |
 | `EMAIL_FROM` | For live email | Verified sender, for example `Nivasa <notices@example.com>`. Required whenever `RESEND_API_KEY` is set; there is no default, because Resend rejects every unverified sender |
@@ -133,7 +134,23 @@ be revoked by clearing `admin_granted` for that user.
 
 ## Authentication and roles
 
-Hosted visitors authenticate through the platform-provided Sign in with ChatGPT flow. The server reads the stable authenticated user ID and email; it never trusts a browser-supplied role. A user whose email appears in `ADMIN_EMAILS` becomes an administrator. All others are residents and complete a flat/contact profile on first use. The stored role is re-synchronised from the allowlist on every request, so revoking access is a configuration change rather than a database edit.
+Residents register with an email and password. Passwords are hashed with
+PBKDF2-SHA256 using a per-user salt, and a session is a random 256-bit token held
+in an `HttpOnly`, `SameSite=Lax` cookie. Sessions are stored server side, so
+signing out revokes access immediately rather than relying on the client to
+discard a cookie.
+
+The server never trusts a browser-supplied role. A user whose email appears in
+`ADMIN_EMAILS` becomes an administrator; everyone else is a resident. The stored
+role is re-synchronised from the allowlist on every request, so revoking access
+is a configuration change rather than a database edit.
+
+Some hosting platforms authenticate visitors themselves and inject identity
+headers. Nivasa accepts those **only** when `TRUST_PLATFORM_IDENTITY=1`, because
+any caller can set such headers unless a proxy strips them from inbound
+requests. Leaving it unset means a deployment on ordinary infrastructure fails
+closed rather than accepting an attacker-supplied identity. Do not set it unless
+your platform guarantees that stripping.
 
 Every protected API resolves identity on the server. Resident complaint and photo reads are ownership-scoped. Admin-only mutations re-check the stored role, so hiding a control in the interface is never the authorization boundary.
 
@@ -155,6 +172,7 @@ All JSON errors use `{ "error": "human-readable message" }`. Protected routes re
 
 | Method | Route | Role | Purpose |
 | --- | --- | --- | --- |
+| `POST` | `/api/auth` | Public | Register, sign in, or sign out via an `action` field |
 | `GET` | `/api/bootstrap` | Signed in | Profile, scoped complaints/history/photos, notices, metrics, settings, delivery activity |
 | `PATCH` | `/api/profile` | Signed in | Complete or update name, flat number, and phone |
 | `POST` | `/api/complaints` | Resident | Multipart complaint creation; optional `photo`, max 2 MB |
@@ -192,6 +210,7 @@ All JSON errors use `{ "error": "human-readable message" }`. Protected routes re
 | `complaint_history` | Append-only creation/status/priority audit events with actor, note, and timestamp |
 | `complaint_photos` | Complaint image bytes, their metadata, and the ownership link |
 | `notices` | Published notices with important/pinned classification |
+| `sessions` | Server-side sessions with owner and expiry |
 | `notification_outbox` | Idempotent resident emails, attempts, delivery state, and provider error |
 
 Indexes cover resident timelines, admin status/category filtering, complaint histories, notice pinning, and outbox retries. Foreign keys preserve ownership and audit attribution. Generated migrations live under `drizzle/`.

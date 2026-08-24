@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test, { after, before, describe } from "node:test";
 import {
   api,
+  BASE_URL,
   createComplaint,
   getComplaint,
   pngBytes,
+  sessionCookieFrom,
   startServer,
   stopServer,
   uniqueKey,
@@ -532,6 +534,163 @@ describe("notification outbox", () => {
     const summed =
       body.deliverySummary.sent + body.deliverySummary.pending + body.deliverySummary.failed;
     assert.ok(summed >= body.notifications.length);
+  });
+});
+
+describe("standalone authentication", () => {
+  const email = `resident-${Date.now()}@example.com`;
+  const password = "correct horse battery";
+  let cookie = null;
+
+  test("platform identity headers are not trusted by default", async () => {
+    // This is the hole that made a Cloudflare deployment unsafe: without a proxy
+    // stripping them, anyone could set these headers and become any user.
+    const forged = await fetch(`${BASE_URL}/api/bootstrap`, {
+      headers: {
+        "oai-authenticated-user-id": "forged-user",
+        "oai-authenticated-user-email": "forged@example.com",
+      },
+    });
+    assert.equal(forged.status, 401, "forged identity headers must not authenticate");
+  });
+
+  test("an anonymous caller cannot read or mutate anything", async () => {
+    const reads = await fetch(`${BASE_URL}/api/bootstrap`);
+    assert.equal(reads.status, 401);
+    const writes = await fetch(`${BASE_URL}/api/notices`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Anonymous notice", body: "Should never be published." }),
+    });
+    assert.equal(writes.status, 401);
+  });
+
+  test("registration creates an account and returns a session", async () => {
+    const response = await fetch(`${BASE_URL}/api/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "register", name: "Test Resident", email, password, flatNumber: "C-101" }),
+    });
+    assert.equal(response.status, 201);
+
+    const header = response.headers.get("set-cookie") ?? "";
+    assert.match(header, /HttpOnly/i, "the session cookie must not be readable by scripts");
+    assert.match(header, /SameSite=Lax/i);
+    cookie = sessionCookieFrom(response);
+    assert.ok(cookie);
+  });
+
+  test("the session authenticates subsequent requests as that resident", async () => {
+    const { status, body } = await api("/api/bootstrap", { role: null, cookie });
+    assert.equal(status, 200);
+    assert.equal(body.user.email, email);
+    assert.equal(body.user.role, "resident");
+    assert.equal(body.user.flatNumber, "C-101");
+  });
+
+  test("rejects a duplicate registration", async () => {
+    const { status } = await api("/api/auth", {
+      method: "POST",
+      body: { action: "register", name: "Someone Else", email, password: "another password" },
+    });
+    assert.equal(status, 409);
+  });
+
+  test("rejects weak passwords and malformed emails", async () => {
+    assert.equal((await api("/api/auth", { method: "POST", body: { action: "register", name: "Short Pass", email: `a-${Date.now()}@example.com`, password: "short" } })).status, 400);
+    assert.equal((await api("/api/auth", { method: "POST", body: { action: "register", name: "Bad Email", email: "not-an-email", password: "a long enough password" } })).status, 400);
+  });
+
+  test("a wrong password is refused and reveals nothing about the account", async () => {
+    const wrong = await api("/api/auth", { method: "POST", body: { action: "login", email, password: "not the password" } });
+    const unknown = await api("/api/auth", { method: "POST", body: { action: "login", email: "nobody@example.com", password: "not the password" } });
+    assert.equal(wrong.status, 401);
+    assert.equal(unknown.status, 401);
+    assert.equal(wrong.body.error, unknown.body.error, "responses must not distinguish the two cases");
+  });
+
+  test("signing in with the right password issues a fresh session", async () => {
+    const response = await fetch(`${BASE_URL}/api/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "login", email, password }),
+    });
+    assert.equal(response.status, 200);
+    const second = sessionCookieFrom(response);
+    assert.ok(second);
+    assert.notEqual(second, cookie, "a new sign in must not reuse the previous token");
+    cookie = second;
+  });
+
+  test("a forged session token is rejected", async () => {
+    const { status } = await api("/api/bootstrap", { role: null, cookie: "nivasa_session=made-up-token" });
+    assert.equal(status, 401);
+  });
+
+  test("signing out invalidates the session server side", async () => {
+    const out = await api("/api/auth", { method: "POST", body: { action: "logout" }, cookie });
+    assert.equal(out.status, 200);
+    // The same cookie must now be worthless even if the client kept it.
+    const after = await api("/api/bootstrap", { role: null, cookie });
+    assert.equal(after.status, 401);
+  });
+});
+
+describe("isolation between two real accounts", () => {
+  // Registration makes it possible to hold two distinct residents at once, which
+  // the two fixed demo identities could never express.
+  let alice = null;
+  let bob = null;
+  let aliceComplaint = null;
+  let alicePhoto = null;
+
+  before(async () => {
+    const stamp = Date.now();
+    const make = async (name, email) => {
+      const response = await fetch(`${BASE_URL}/api/auth`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "register", name, email, password: "a sufficiently long password", flatNumber: "B-201" }),
+      });
+      assert.equal(response.status, 201);
+      return sessionCookieFrom(response);
+    };
+    alice = await make("Alice Resident", `alice-${stamp}@example.com`);
+    bob = await make("Bob Resident", `bob-${stamp}@example.com`);
+
+    const form = new FormData();
+    form.set("title", "Balcony door lock is broken");
+    form.set("category", "Security");
+    form.set("description", "The balcony door latch does not engage properly.");
+    form.set("location", "B-201");
+    form.set("idempotencyKey", uniqueKey("isolation"));
+    form.set("photo", new Blob([pngBytes()], { type: "image/png" }), "lock.png");
+    const created = await api("/api/complaints", { role: null, cookie: alice, method: "POST", body: form });
+    assert.equal(created.status, 201);
+    aliceComplaint = created.body.complaintId;
+
+    const { body } = await api("/api/bootstrap", { role: null, cookie: alice });
+    alicePhoto = body.complaints.find((item) => item.id === aliceComplaint).photos[0].id;
+  });
+
+  test("a resident sees only their own complaints", async () => {
+    const forAlice = await api("/api/bootstrap", { role: null, cookie: alice });
+    const forBob = await api("/api/bootstrap", { role: null, cookie: bob });
+    assert.ok(forAlice.body.complaints.some((item) => item.id === aliceComplaint));
+    assert.equal(forBob.body.complaints.some((item) => item.id === aliceComplaint), false);
+  });
+
+  test("another resident cannot read the photo, and an anonymous caller cannot either", async () => {
+    assert.equal((await api(`/api/photos/${alicePhoto}`, { role: null, cookie: alice, raw: true })).status, 200);
+    assert.equal((await api(`/api/photos/${alicePhoto}`, { role: null, cookie: bob, raw: true })).status, 403);
+    assert.equal((await api(`/api/photos/${alicePhoto}`, { role: null, raw: true })).status, 401);
+  });
+
+  test("a registered resident has no administrator powers", async () => {
+    const notice = await api("/api/notices", { role: null, cookie: bob, method: "POST", body: { title: "Not allowed", body: "Bob is only a resident here." } });
+    assert.equal(notice.status, 403);
+    const update = await api("/api/complaints", { role: null, cookie: bob, method: "PATCH", body: { id: aliceComplaint, status: "Resolved", expectedVersion: 1 } });
+    assert.equal(update.status, 403);
   });
 });
 

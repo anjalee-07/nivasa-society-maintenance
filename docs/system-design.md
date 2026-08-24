@@ -1,6 +1,12 @@
 # Nivasa system design
 
-Nivasa is a Cloudflare-compatible full-stack application built around D1 for both structured records and private complaint images. The frontend consumes route-handler APIs; every API resolves the authenticated platform user on the server and derives the role from stored data plus the configured admin email allowlist. Residents are always scoped to their own complaint and photo records. Admin mutations perform a second server-side role check.
+Nivasa is a Cloudflare-compatible application built on D1 for both structured records and private complaint images. Every API resolves the caller on the server and derives the role from stored data plus the admin email allowlist. Residents are scoped to their own complaints and photos; admin mutations re-check the role server side.
+
+## Authentication
+
+Residents register with an email and password, stored as PBKDF2-SHA256 with a per-user salt and the iteration count recorded alongside the hash so it can be raised later without invalidating existing passwords. A session is a random 256-bit token in an `HttpOnly`, `SameSite=Lax` cookie; the user and expiry live in `sessions`, so signing out revokes access immediately. Sign-in answers identically for an unknown address and a wrong password.
+
+The application can also accept identity from a hosting platform that injects authenticated user headers. That is trusted only when `TRUST_PLATFORM_IDENTITY` is set, because such headers are forgeable by any caller unless a proxy strips them from inbound requests. Defaulting to distrust means an otherwise identical deployment on ordinary infrastructure fails closed instead of accepting an attacker-supplied identity.
 
 ## Complaint history model
 
@@ -16,7 +22,7 @@ The threshold is a persisted integer setting from 1 to 60 days. Overdue is delib
 
 The browser sends at most one optional image in a multipart request. The API verifies JPEG, PNG, or WebP signatures from the bytes rather than trusting the filename or client MIME type, so a renamed executable is rejected before anything is stored. Images are held as a `BLOB` in `complaint_photos` beside their metadata. D1 refuses values past roughly two megabytes, so the API enforces a 2 MB limit and returns `413` rather than surfacing a database error.
 
-Storing the bytes in the database rather than object storage keeps the photo write inside the same batch as the complaint and its history event. The upload therefore commits or fails as a unit, and no compensating delete is needed to avoid orphaned objects. The trade-off is a firmer size ceiling and row-sized reads; object storage would be the better choice if photos grew larger or more numerous.
+Keeping bytes in the database puts the photo write in the same batch as the complaint and its history event, so the upload commits or fails as a unit and no compensating delete is needed. The trade-off is a firmer size ceiling; object storage would suit larger or more numerous photos.
 
 Images are never served from a public path. `/api/photos/:id` joins the photo to its complaint, authorizes the current resident owner or an administrator, and only then returns the bytes, with a private cache policy and `nosniff` protection.
 
@@ -24,10 +30,10 @@ Images are never served from a public path. `/api/photos/:id` joins the photo to
 
 A status change creates an idempotent `notification_outbox` row keyed by complaint and version. An important notice creates one row per registered resident, keyed by notice and recipient. The complaint or notice transaction remains successful even when the provider is unavailable. The dispatcher attempts delivery through Resend with the outbox ID as the provider idempotency key, then records `sent` or `failed`, attempt count, timestamp, and a bounded error message. Without provider configuration, messages remain `pending` and are visible in the admin delivery center for retry.
 
-Delivery is deliberately kept off the request path. The route commits the outbox rows and hands draining to the runtime, so an administrator saving a status change never waits on a third-party API, and a fan-out to many residents cannot exhaust one invocation. A drain walks queued and retryable messages oldest first in a bounded batch, and stops early when the provider is unconfigured, since every remaining message would report the same gap. A missing sender address is treated as configuration rather than a delivery attempt, so a message keeps its full retry budget until the provider can actually accept it. An explicit administrator retry overrides the attempt ceiling, because that is a deliberate decision rather than an automatic loop.
+Delivery is kept off the request path: the route commits the outbox rows and hands draining to the runtime, so an administrator never waits on a third-party API and a large fan-out cannot exhaust one invocation. A drain walks queued and retryable messages oldest first in a bounded batch. Missing provider configuration is treated as configuration rather than a failed attempt, so a message keeps its full retry budget; an explicit administrator retry overrides the attempt ceiling.
 
-This outbox design prevents duplicate mail on browser retries, preserves an audit trail, and keeps email failure from rolling back real maintenance work. Important notices are sorted before ordinary notices using an indexed `(important, published_at)` path, so pinned information remains deterministic.
+The outbox prevents duplicate mail on retries, preserves an audit trail, and keeps email failure from rolling back maintenance work.
 
 ## Reporting and operations
 
-Dashboard metrics are calculated from the same authorized complaint result used by the queue, ensuring counts reconcile with visible records. D1 indexes support resident timelines, status/category filters, histories, and outbox retries. A health endpoint checks database readiness. Generated migrations, runtime schema guards, strict API validation, optimistic concurrency, upload cleanup, and provider retry state make the application safe to operate while keeping the architecture small enough for a society team to maintain.
+Dashboard metrics come from the same authorized complaint result as the queue, so counts reconcile with visible records. Indexes support resident timelines, status and category filters, histories, and outbox retries, and a health endpoint checks database readiness. Runtime schema guards, strict validation, optimistic concurrency, and recorded retry state keep the application safe to operate while small enough for a society team to maintain.

@@ -352,6 +352,16 @@ button.metric-card { width: 100%; }
 .email-setup-alert { align-items: flex-start; gap: 11px; }
 .email-setup-alert strong { display: block; font-size: 0.7rem; }
 .email-setup-alert p { margin: 4px 0 0; font-size: 0.6rem; line-height: 1.55; max-width: 68ch; }
+.auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--page, #f4f6f2); }
+.auth-card { width: min(430px, 100%); background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 30px 28px 22px; box-shadow: 0 18px 44px rgba(23, 35, 29, 0.08); text-align: left; }
+.auth-card h1 { margin: 10px 0 6px; font-size: 1.35rem; letter-spacing: -0.02em; }
+.auth-card > p { margin: 0 0 18px; color: var(--muted); font-size: 0.68rem; line-height: 1.6; }
+.auth-card .onboarding-mark { margin-bottom: 14px; }
+.auth-error { margin-bottom: 14px; }
+.auth-toggle { display: block; width: 100%; margin-top: 14px; padding: 9px; background: none; border: none; border-top: 1px solid var(--line); color: var(--brand, #214a31); font-size: 0.63rem; font-weight: 600; cursor: pointer; }
+.auth-toggle:hover { text-decoration: underline; }
+.sign-out { background: none; border: none; cursor: pointer; font-size: 0.8rem; color: var(--muted); padding: 2px 4px; }
+.sign-out:hover { color: var(--ink); }
 .email-setup-alert code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 1px 5px; font-size: 0.95em; }
 .delivery-list article { display: grid; grid-template-columns: 30px 1fr auto auto; align-items: center; gap: 13px; border-top: 1px solid var(--line); padding: 14px 0; }
 .delivery-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--paper-deep); color: var(--muted); font-size: 0.7rem; font-weight: 800; }.delivery-mark.sent{background:var(--green-soft);color:var(--green)}.delivery-mark.failed{background:#fff0ec;color:var(--red)}.delivery-mark.pending{background:var(--blue-soft);color:var(--blue)}

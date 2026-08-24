@@ -1,6 +1,7 @@
 import { getChatGPTUser } from "../app/chatgpt-auth";
 import { ApiError } from "./api";
 import { getAppEnv, getDatabase } from "./database";
+import { readSession } from "./session";
 
 export type UserRole = "resident" | "admin";
 
@@ -93,12 +94,30 @@ export async function requireAdmin(request: Request): Promise<CurrentUser> {
 }
 
 async function resolveIdentity(request: Request): Promise<Identity | null> {
-  const platformUser = await getChatGPTUser();
-  if (platformUser) {
+  // The `oai-authenticated-user-*` headers are only trustworthy behind a proxy
+  // that strips them from inbound requests and injects them after
+  // authenticating. Anywhere else any caller could set them by hand and
+  // impersonate anyone, so trusting them is opt-in per deployment rather than
+  // the default.
+  if (getAppEnv().TRUST_PLATFORM_IDENTITY === "1") {
+    const platformUser = await getChatGPTUser();
+    if (platformUser) {
+      return {
+        id: platformUser.userId,
+        email: platformUser.email,
+        name: platformUser.displayName,
+        preferredRole: "resident",
+        isDemo: false,
+      };
+    }
+  }
+
+  const session = await readSession(request);
+  if (session) {
     return {
-      id: platformUser.userId,
-      email: platformUser.email,
-      name: platformUser.displayName,
+      id: session.id,
+      email: session.email,
+      name: session.name,
       preferredRole: "resident",
       isDemo: false,
     };
@@ -108,9 +127,12 @@ async function resolveIdentity(request: Request): Promise<Identity | null> {
   const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
   if (!isLocal) return null;
 
-  const role = request.headers.get("x-nivasa-demo-role") === "resident"
-    ? "resident"
-    : "admin";
+  // The preview role must be asked for explicitly. Defaulting to admin when the
+  // header is absent would authenticate every anonymous local request, and would
+  // hide the real sign-in flow during development.
+  const requested = request.headers.get("x-nivasa-demo-role");
+  if (requested !== "resident" && requested !== "admin") return null;
+  const role = requested;
   return role === "admin"
     ? {
         id: "demo-admin",
