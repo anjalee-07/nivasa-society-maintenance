@@ -4,9 +4,9 @@ Nivasa is a Cloudflare-compatible application built on D1 for both structured re
 
 ## Authentication
 
-Residents register with an email and password, stored as PBKDF2-SHA256 with a per-user salt and the iteration count recorded alongside the hash so it can be raised later without invalidating existing passwords. A session is a random 256-bit token in an `HttpOnly`, `SameSite=Lax` cookie; the user and expiry live in `sessions`, so signing out revokes access immediately. Sign-in answers identically for an unknown address and a wrong password.
+Residents register with an email and password, stored as PBKDF2-SHA256 with a per-user salt. The work factor is 10,000 iterations, below current guidance: the host allows 10ms of CPU per request, and a stronger factor cannot finish one. Each hash records its own iteration count, so the factor can be raised on a larger tier without invalidating existing passwords. A session is a random 256-bit token in an `HttpOnly`, `SameSite=Lax` cookie; the user and expiry live in `sessions`, so signing out revokes access immediately. Sign-in answers identically for an unknown address and a wrong password.
 
-The application can also accept identity from a hosting platform that injects authenticated user headers. That is trusted only when `TRUST_PLATFORM_IDENTITY` is set, because such headers are forgeable by any caller unless a proxy strips them from inbound requests. Defaulting to distrust means an otherwise identical deployment on ordinary infrastructure fails closed instead of accepting an attacker-supplied identity.
+Identity headers injected by a hosting platform are trusted only when `TRUST_PLATFORM_IDENTITY` is set, because any caller can forge them unless a proxy strips them from inbound requests. Defaulting to distrust makes a deployment on ordinary infrastructure fail closed rather than accept an attacker-supplied identity.
 
 ## Complaint history model
 
@@ -16,7 +16,7 @@ The accepted lifecycle is `Open -> In Progress -> Resolved`, with a permitted di
 
 ## Overdue detection
 
-The threshold is a persisted integer setting from 1 to 60 days. Overdue is deliberately derived at read time using the D1 server clock: an unresolved complaint is overdue when the difference between `now` and `created_at` reaches the configured number of days. Resolved complaints are excluded. This avoids stale flags and means a settings change is reflected immediately in sorting, filters, and metrics. Admin queues sort overdue requests first, then priority, then creation time.
+The threshold is a persisted setting from 1 to 60 days. Overdue is derived at read time from the D1 server clock: an unresolved complaint is overdue once `now - created_at` reaches the configured days. Resolved complaints are excluded. This avoids stale flags, so a settings change is reflected immediately in sorting, filters, and metrics. Admin queues sort overdue first, then priority, then creation time.
 
 ## Photo handling
 
@@ -24,7 +24,7 @@ The browser sends at most one optional image in a multipart request. The API ver
 
 Keeping bytes in the database puts the photo write in the same batch as the complaint and its history event, so the upload commits or fails as a unit and no compensating delete is needed. The trade-off is a firmer size ceiling; object storage would suit larger or more numerous photos.
 
-Images are never served from a public path. `/api/photos/:id` joins the photo to its complaint, authorizes the current resident owner or an administrator, and only then returns the bytes, with a private cache policy and `nosniff` protection.
+Images are never served from a public path. `/api/photos/:id` joins the photo to its complaint, authorizes the resident owner or an administrator, and only then returns the bytes, with a private cache policy and `nosniff` protection.
 
 ## Notification flow
 
@@ -32,8 +32,8 @@ A status change creates an idempotent `notification_outbox` row keyed by complai
 
 Delivery is kept off the request path: the route commits the outbox rows and hands draining to the runtime, so an administrator never waits on a third-party API and a large fan-out cannot exhaust one invocation. A drain walks queued and retryable messages oldest first in a bounded batch. Missing provider configuration is treated as configuration rather than a failed attempt, so a message keeps its full retry budget; an explicit administrator retry overrides the attempt ceiling.
 
-The outbox prevents duplicate mail on retries, preserves an audit trail, and keeps email failure from rolling back maintenance work.
+The outbox prevents duplicate mail, preserves an audit trail, and keeps email failure from rolling back maintenance work.
 
 ## Reporting and operations
 
-Dashboard metrics come from the same authorized complaint result as the queue, so counts reconcile with visible records. Indexes support resident timelines, status and category filters, histories, and outbox retries, and a health endpoint checks database readiness. Runtime schema guards, strict validation, optimistic concurrency, and recorded retry state keep the application safe to operate while small enough for a society team to maintain.
+Dashboard metrics come from the same authorized complaint result as the queue, so counts reconcile with visible records. Indexes support resident timelines, status and category filters, histories, and outbox retries, and a health endpoint checks database readiness. Runtime schema guards, strict validation, and optimistic concurrency keep the application safe to operate while small enough for a society team to maintain.

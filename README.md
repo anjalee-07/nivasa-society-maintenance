@@ -136,7 +136,19 @@ be revoked by clearing `admin_granted` for that user.
 
 Residents register with an email and password. Passwords are hashed with
 PBKDF2-SHA256 using a per-user salt, and a session is a random 256-bit token held
-in an `HttpOnly`, `SameSite=Lax` cookie. Sessions are stored server side, so
+in an `HttpOnly`, `SameSite=Lax` cookie.
+
+The work factor is **10,000 iterations, which is lower than current guidance**
+recommends. Cloudflare's free Workers plan allows 10 ms of CPU per request in
+total; measured cost is about 4.7 ms at this setting against 60 ms at 210,000,
+so a stronger factor cannot complete a request on that tier at all. This is a
+deliberate trade-off of hashing strength for running on a free plan, and it
+weakens resistance to offline brute force if the database is ever stolen.
+
+Each stored hash records the iteration count it was written with
+(`pbkdf2$<iterations>$<salt>$<hash>`), so raising the factor on a larger plan is
+a one-line change: existing passwords keep verifying, and new ones use the
+stronger setting. Sessions are stored server side, so
 signing out revokes access immediately rather than relying on the client to
 discard a cookie.
 

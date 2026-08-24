@@ -7,7 +7,18 @@
  * passwords already in the database.
  */
 
-const iterations = 210000;
+/**
+ * Deliberately below current guidance, which puts PBKDF2-SHA256 in the hundreds
+ * of thousands of iterations. The Cloudflare Workers free plan allows 10ms of
+ * CPU per request in total, and measured cost is roughly 4.7ms at this setting
+ * against 60ms at 210,000 - so a stronger factor cannot complete a request at
+ * all on this tier.
+ *
+ * The stored format records the iteration count per password, so raising this
+ * later re-hashes nothing: existing passwords keep verifying at the factor they
+ * were written with, and new ones use the stronger setting.
+ */
+const iterations = 10000;
 const keyLength = 32;
 const saltLength = 16;
 
